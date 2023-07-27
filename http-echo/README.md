@@ -26,3 +26,10 @@ return packet speed, Controls the number of bytes that can be returned per secon
 example: /?content=random&length=1000&speed=100
 
 The server will return 10 times, which takes 10 seconds.
+
+## Docker images
+
+```shell
+docker pull fancymore/http-echo:latest
+docker run -it fancymore/http-echo:latest /http-echo --port 80
+```

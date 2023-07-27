@@ -13,5 +13,5 @@ FROM alpine:latest
 
 COPY --from=builder /tmp/http-echo/http-echo /
 
-ENTRYPOINT ("/http-echo")
+CMD ["/http-echo"]
 
