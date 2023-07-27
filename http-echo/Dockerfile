@@ -1,12 +1,13 @@
 
 FROM alpine:latest as builder
 
-apk add go
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+RUN apk add go
 
 RUN mkdir -p /tmp/http-echo
 COPY . /tmp/http-echo/
 
-RUN go build /tmp/http-echo
+RUN cd /tmp/http-echo; go build
 
 FROM alpine:latest
 
