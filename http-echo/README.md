@@ -31,5 +31,5 @@ The server will return 10 times, which takes 10 seconds.
 
 ```shell
 docker pull fancymore/http-echo:latest
-docker run -it fancymore/http-echo:latest /http-echo --port 80
+docker run -p 80:80 fancymore/http-echo /http-echo --port 80
 ```
