@@ -19,3 +19,10 @@
 
 # Go workspace file
 go.work
+
+# Configuration files
+https-relay/dns_cache.conf
+https-relay/ca.crt
+https-relay/ca.key
+https-relay/server.crt
+https-relay/server.key
