@@ -1,5 +1,11 @@
 # network-toolbox
 
-Some networking tools for building network use cases
+一个网络工具集，提供多种网络相关的实用工具。
 
-* **http-echo** : Simple http service that responds based on request parameters
+## 组件列表
+
+| 组件 | 描述 | 功能特点 |
+|------|------|----------|
+| **share-note** | 基于 WebSocket 的实时共享编辑工具 | 实时同步、响应式设计、自动重连 |
+| **curl** | 支持多协议的 HTTP 客户端工具 | HTTP/1.1/2/3 支持、证书验证、POST 请求、延迟发送 |
+| **http-echo** | 简单的 HTTP echo 服务 | echo 模式、随机字符串生成、速度限制 |

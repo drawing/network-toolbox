@@ -1,33 +1,32 @@
-
 # http-echo
 
-Program startup parameters:
+## 程序启动参数
 
-| startup parameter | description       |
-| :---------------- | :---------------- |
-| host              | listening address |
-| port              | listening port    |
+| 启动参数 | 描述 |
+| :------- | :--- |
+| host     | 监听地址 |
+| port     | 监听端口 |
 
-# request parameters
+## 请求参数
 
-## content
+### content
 
-The description of the different values of the content parameter is as follows:
+content 参数不同值的说明如下：
 
-| value  | description                                                                                     | example path                |
-| :----- | :---------------------------------------------------------------------------------------------- | :-------------------------- |
-| random | The response body returns random characters, and the size is determined by the parameter length | /?content=random&length=100 |
-| echo   | Return the value of the parameter data as it is                                                 | /?content=echo&data=abc     |
+| 值    | 描述                                                               | 示例路径                   |
+| :----- | :----------------------------------------------------------------- | :------------------------- |
+| random | 响应体返回随机字符，大小由参数 length 决定                          | /?content=random&length=100 |
+| echo   | 原样返回参数 data 的值                                             | /?content=echo&data=abc     |
 
-## speed
+### speed
 
-return packet speed, Controls the number of bytes that can be returned per second.
+返回包速度，控制每秒可以返回的字节数。
 
-example: /?content=random&length=1000&speed=100
+示例：/?content=random&length=1000&speed=100
 
-The server will return 10 times, which takes 10 seconds.
+服务器将返回 10 次，耗时 10 秒。
 
-## Docker images
+## Docker 镜像
 
 ```shell
 docker pull fancymore/http-echo:latest
