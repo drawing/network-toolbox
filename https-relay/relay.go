@@ -330,12 +330,15 @@ func updateHostsFile() {
 		return
 	}
 
-	// 处理文件内容，移除旧的自动添加区域
+	// 处理文件内容，移除：
+	// 1. 旧的自动添加区域
+	// 2. 所有 dnsCache 中的域名（包括手动添加的）
 	lines := strings.Split(string(content), "\n")
 	var newContent []string
 	inAutoSection := false
 
 	for _, line := range lines {
+		// 处理自动添加区域标记
 		if line == startMarker {
 			inAutoSection = true
 			continue
@@ -344,7 +347,25 @@ func updateHostsFile() {
 			inAutoSection = false
 			continue
 		}
-		if !inAutoSection {
+		
+		// 如果在自动添加区域内，跳过
+		if inAutoSection {
+			continue
+		}
+		
+		// 检查是否包含 dnsCache 中的域名（需要删除）
+		keepLine := true
+		if line != "" && !strings.HasPrefix(line, "#") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				if _, exists := dnsCache[parts[1]]; exists {
+					log.Printf("[I] Removed old entry: %s", line)
+					keepLine = false
+				}
+			}
+		}
+		
+		if keepLine {
 			newContent = append(newContent, line)
 		}
 	}
@@ -358,6 +379,11 @@ func updateHostsFile() {
 	if len(dnsCache) == 0 {
 		if err := os.Truncate(hostsFile, 0); err != nil {
 			log.Printf("[E] Failed to truncate %s: %v", hostsFile, err)
+			return
+		}
+		// 重置文件指针到开头
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			log.Printf("[E] Failed to seek to start of %s: %v", hostsFile, err)
 			return
 		}
 		if _, err := file.WriteString(strings.Join(newContent, "\n")); err != nil {
@@ -382,6 +408,11 @@ func updateHostsFile() {
 	// 写入更新后的内容
 	if err := os.Truncate(hostsFile, 0); err != nil {
 		log.Printf("[E] Failed to truncate %s: %v", hostsFile, err)
+		return
+	}
+	// 重置文件指针到开头，避免写入位置错误
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		log.Printf("[E] Failed to seek to start of %s: %v", hostsFile, err)
 		return
 	}
 
