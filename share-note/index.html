@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>共享实时输入框</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background: #f7f8fa;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status-connected {
+            background: #e6f7e6;
+            color: #2a962a;
+            display: block;
+        }
+
+        .status-disconnected {
+            background: #fff1f0;
+            color: #d32f2f;
+            display: block;
+        }
+
+        .status-locked {
+            background: #fff7e6;
+            color: #fa8c16;
+            display: block;
+        }
+
+        .status-locked-by-me {
+            background: #e6f7ff;
+            color: #1890ff;
+            display: block;
+        }
+
+        .lock-button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .lock-button:hover {
+            opacity: 0.8;
+        }
+
+        .lock-button-unlocked {
+            background: #52c41a;
+            color: white;
+        }
+
+        .lock-button-locked {
+            background: #ff4d4f;
+            color: white;
+        }
+
+        .lock-button-disabled {
+            background: #d9d9d9;
+            color: #999;
+            cursor: not-allowed;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 15px;
+            font-size: 16px;
+            border: 1px solid #eee;
+            border-radius: 12px;
+            background: #fff;
+            resize: none;
+            outline: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        /* PC 样式 */
+        @media screen and (min-width: 768px) {
+            textarea {
+                height: 500px;
+            }
+        }
+
+        /* 手机样式（自动适配）*/
+        @media screen and (max-width: 767px) {
+            body {
+                padding: 5px;
+                background: #fff;
+            }
+            .header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 5px;
+            }
+            .lock-button {
+                font-size: 12px;
+                padding: 6px 12px;
+            }
+            textarea {
+                height: 75vh;
+                font-size: 18px;
+                border-radius: 8px;
+                border: none;
+                box-shadow: none;
+            }
+            .status {
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div id="status" class="status">连接中...</div>
+            <button id="lockButton" class="lock-button lock-button-unlocked">🔒 抢锁编辑</button>
+        </div>
+        <textarea id="editor" placeholder="输入内容，实时多人同步…"></textarea>
+    </div>
+
+    <script>
+        const editor = document.getElementById('editor');
+        const status = document.getElementById('status');
+        const lockButton = document.getElementById('lockButton');
+        let ws;
+        let reconnectInterval = 30000; // 30秒重连
+        let isConnected = false;
+        let isLocked = false;
+        let lockedByMe = false;
+        let clientId = '';
+
+        // 生成唯一客户端ID
+        function generateClientId() {
+            return 'client_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // 自动连接
+        function connect() {
+            // 关闭旧连接
+            if (ws) {
+                ws.close();
+            }
+
+            // 生成客户端ID
+            clientId = generateClientId();
+
+            // 新建 WebSocket
+            ws = new WebSocket("ws://" + location.host + "/ws");
+
+            // 连接成功
+            ws.onopen = function () {
+                isConnected = true;
+                updateUI();
+            };
+
+            // 收到消息
+            ws.onmessage = function (evt) {
+                console.log("收到消息:", evt.data);
+                try {
+                    const data = JSON.parse(evt.data);
+                    if (data.type === 'content') {
+                        console.log("收到内容消息:", data.content);
+                        editor.value = data.content || '';
+                    } else if (data.type === 'lock') {
+                        console.log("收到锁状态消息:", data);
+                        isLocked = data.locked;
+                        lockedByMe = data.lockedBy === clientId;
+                        console.log("更新后状态:", {isLocked, lockedByMe, clientId});
+                        updateUI();
+                    }
+                } catch (e) {
+                    console.log("解析消息失败:", e);
+                    // 兼容旧格式
+                    editor.value = evt.data || '';
+                }
+            };
+
+            // 连接关闭/失败
+            ws.onclose = function () {
+                if (isConnected) {
+                    isConnected = false;
+                    status.className = "status status-disconnected";
+                    status.innerText = "🔌 已断开，" + (reconnectInterval / 1000) + "秒后自动重试...";
+                    lockButton.className = "lock-button lock-button-disabled";
+                    lockButton.textContent = "🔒 抢锁编辑";
+                    editor.disabled = true;
+                }
+                // 定时重连
+                setTimeout(connect, reconnectInterval);
+            };
+
+            // 连接错误
+            ws.onerror = function (err) {
+                console.log("WebSocket 错误", err);
+                ws.close();
+            };
+        }
+
+        // 更新状态显示
+        function updateStatus() {
+            if (!isConnected) {
+                status.className = "status status-disconnected";
+                status.innerText = "🔌 已断开，" + (reconnectInterval / 1000) + "秒后自动重试...";
+                return;
+            }
+
+            if (isLocked) {
+                if (lockedByMe) {
+                    status.className = "status status-locked-by-me";
+                    status.innerText = "🔓 已抢到锁 · 可编辑";
+                } else {
+                    status.className = "status status-locked";
+                    status.innerText = "🔒 已被锁定 · 只读模式";
+                }
+            } else {
+                status.className = "status status-connected";
+                status.innerText = "✅ 已连接 · 实时同步中";
+            }
+        }
+
+        // 更新UI状态
+        function updateUI() {
+            updateStatus();
+            
+            if (!isConnected) {
+                lockButton.className = "lock-button lock-button-disabled";
+                lockButton.textContent = "🔒 抢锁编辑";
+                editor.disabled = true;
+                return;
+            }
+
+            if (isLocked) {
+                if (lockedByMe) {
+                    lockButton.className = "lock-button lock-button-locked";
+                    lockButton.textContent = "🔓 释放锁";
+                    editor.disabled = false;
+                } else {
+                    lockButton.className = "lock-button lock-button-disabled";
+                    lockButton.textContent = "🔒 已被锁定";
+                    editor.disabled = true;
+                }
+            } else {
+                lockButton.className = "lock-button lock-button-unlocked";
+                lockButton.textContent = "🔒 抢锁编辑";
+                editor.disabled = true; // 未锁定时也设置为只读
+            }
+        }
+
+        // 抢锁/释放锁
+        function toggleLock() {
+            if (!isConnected) {
+                console.log("未连接，无法抢锁");
+                return;
+            }
+            
+            console.log("当前状态:", {isConnected, isLocked, lockedByMe, clientId});
+            
+            if (isLocked && lockedByMe) {
+                // 释放锁
+                console.log("释放锁");
+                ws.send(JSON.stringify({
+                    type: 'unlock',
+                    clientId: clientId
+                }));
+            } else if (!isLocked) {
+                // 抢锁
+                console.log("抢锁");
+                ws.send(JSON.stringify({
+                    type: 'lock',
+                    clientId: clientId
+                }));
+            } else {
+                console.log("锁已被占用，无法抢锁");
+            }
+        }
+
+        // 输入变化 → 发送
+        editor.oninput = function () {
+            if (ws && isConnected && isLocked && lockedByMe) {
+                try {
+                    ws.send(JSON.stringify({
+                        type: 'content',
+                        content: editor.value,
+                        clientId: clientId
+                    }));
+                } catch (e) {}
+            }
+        };
+
+        // 锁按钮点击事件
+        lockButton.addEventListener('click', toggleLock);
+
+        // 启动
+        connect();
+    </script>
+</body>
+</html>

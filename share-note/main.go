@@ -1,9 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
-	"html/template"
 	"log"
 	"net/http"
 	"sync"
@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	content string
-	clients = make(map[*websocket.Conn]bool)
-	mutex   sync.Mutex
+	content     string
+	clients     = make(map[*websocket.Conn]string) // conn -> clientId
+	isLocked    bool
+	lockedBy    string
+	mutex       sync.Mutex
 )
 
 var upgrader = websocket.Upgrader{
@@ -23,161 +25,55 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-const html = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>共享实时输入框</title>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-            background: #f7f8fa;
-            padding: 10px;
-        }
-
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        .status {
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 14px;
-            margin-bottom: 10px;
-            display: none;
-        }
-
-        .status-connected {
-            background: #e6f7e6;
-            color: #2a962a;
-            display: block;
-        }
-
-        .status-disconnected {
-            background: #fff1f0;
-            color: #d32f2f;
-            display: block;
-        }
-
-        textarea {
-            width: 100%;
-            padding: 15px;
-            font-size: 16px;
-            border: 1px solid #eee;
-            border-radius: 12px;
-            background: #fff;
-            resize: none;
-            outline: none;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-
-        /* PC 样式 */
-        @media screen and (min-width: 768px) {
-            textarea {
-                height: 500px;
-            }
-        }
-
-        /* 手机样式（自动适配）*/
-        @media screen and (max-width: 767px) {
-            body {
-                padding: 5px;
-                background: #fff;
-            }
-            textarea {
-                height: 82vh;
-                font-size: 18px;
-                border-radius: 8px;
-                border: none;
-                box-shadow: none;
-            }
-            .status {
-                font-size: 12px;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div id="status" class="status">连接中...</div>
-        <textarea id="editor" placeholder="输入内容，实时多人同步…"></textarea>
-    </div>
-
-    <script>
-        const editor = document.getElementById('editor');
-        const status = document.getElementById('status');
-        let ws;
-        let reconnectInterval = 30000; // 30秒重连
-        let isConnected = false;
-
-        // 自动连接
-        function connect() {
-            // 关闭旧连接
-            if (ws) {
-                ws.close();
-            }
-
-            // 新建 WebSocket
-            ws = new WebSocket("ws://" + location.host + "/ws");
-
-            // 连接成功
-            ws.onopen = function () {
-                isConnected = true;
-                status.className = "status status-connected";
-                status.innerText = "✅ 已连接 · 实时同步中";
-            };
-
-            // 收到消息
-            ws.onmessage = function (evt) {
-                editor.value = evt.data;
-            };
-
-            // 连接关闭/失败
-            ws.onclose = function () {
-                if (isConnected) {
-                    isConnected = false;
-                    status.className = "status status-disconnected";
-                    status.innerText = "🔌 已断开，" + (reconnectInterval / 1000) + "秒后自动重试...";
-                }
-                // 定时重连
-                setTimeout(connect, reconnectInterval);
-            };
-
-            // 连接错误
-            ws.onerror = function (err) {
-                console.log("WebSocket 错误", err);
-                ws.close();
-            };
-        }
-
-        // 输入变化 → 发送
-        editor.oninput = function () {
-            if (ws && isConnected) {
-                try {
-                    ws.send(editor.value);
-                } catch (e) {}
-            }
-        };
-
-        // 启动
-        connect();
-    </script>
-</body>
-</html>
-`
-
 func handleIndex(w http.ResponseWriter, r *http.Request) {
-	tpl, _ := template.New("index").Parse(html)
-	tpl.Execute(w, nil)
+	http.ServeFile(w, r, "index.html")
+}
+
+// Message 定义WebSocket消息结构
+type Message struct {
+	Type     string `json:"type"`
+	Content  string `json:"content,omitempty"`
+	ClientID string `json:"clientId,omitempty"`
+}
+
+// LockStatus 定义锁状态消息
+type LockStatus struct {
+	Type     string `json:"type"`
+	Locked   bool   `json:"locked"`
+	LockedBy string `json:"lockedBy,omitempty"`
+}
+
+// broadcast 广播消息给所有客户端（可选排除特定客户端）
+func broadcast(msg []byte, excludeConn *websocket.Conn) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	
+	for conn := range clients {
+		if conn != excludeConn {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				log.Printf("广播消息失败: %v", err)
+				// 删除失败的连接
+				delete(clients, conn)
+			}
+		}
+	}
+}
+
+// broadcastLockStatus 广播锁状态给所有客户端
+func broadcastLockStatus() {
+	lockMsg := LockStatus{
+		Type:     "lock",
+		Locked:   isLocked,
+		LockedBy: lockedBy,
+	}
+	
+	msgBytes, err := json.Marshal(lockMsg)
+	if err != nil {
+		log.Printf("序列化锁状态失败: %v", err)
+		return
+	}
+	
+	broadcast(msgBytes, nil)
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -186,16 +82,56 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Println("upgrade error:", err)
 		return
 	}
+	
+	// 为新连接分配临时客户端ID
+	tempClientID := "temp_" + conn.RemoteAddr().String()
+	
+	mutex.Lock()
+	clients[conn] = tempClientID
+	mutex.Unlock()
+	
 	defer func() {
+		mutex.Lock()
+		clientID := clients[conn]
+		delete(clients, conn)
+		// 如果断开的客户端持有锁，自动释放锁
+		if isLocked && lockedBy == clientID {
+			isLocked = false
+			lockedBy = ""
+			log.Printf("客户端 %s 断开连接，自动释放锁", clientID)
+			mutex.Unlock()
+			broadcastLockStatus()
+		} else {
+			mutex.Unlock()
+		}
 		conn.Close()
+		log.Printf("客户端断开 | 在线: %d\n", len(clients))
 	}()
 
-	mutex.Lock()
-	clients[conn] = true
-	conn.WriteMessage(websocket.TextMessage, []byte(content))
-	mutex.Unlock()
-
 	log.Printf("新客户端连接 | 在线: %d\n", len(clients))
+
+	// 发送当前内容给新客户端
+	contentMsg := Message{
+		Type:    "content",
+		Content: content,
+	}
+	contentBytes, _ := json.Marshal(contentMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, contentBytes); err != nil {
+		log.Printf("发送内容失败: %v", err)
+		return
+	}
+
+	// 发送当前锁状态给新客户端
+	lockMsg := LockStatus{
+		Type:     "lock",
+		Locked:   isLocked,
+		LockedBy: lockedBy,
+	}
+	lockBytes, _ := json.Marshal(lockMsg)
+	if err := conn.WriteMessage(websocket.TextMessage, lockBytes); err != nil {
+		log.Printf("发送锁状态失败: %v", err)
+		return
+	}
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -203,18 +139,65 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		mutex.Lock()
-		content = string(msg)
-		for client := range clients {
-			client.WriteMessage(websocket.TextMessage, msg)
+		var message Message
+		if err := json.Unmarshal(msg, &message); err != nil {
+			// 兼容旧格式
+			mutex.Lock()
+			content = string(msg)
+			contentMsg := Message{
+				Type:    "content",
+				Content: content,
+			}
+			contentBytes, _ := json.Marshal(contentMsg)
+			for client := range clients {
+				client.WriteMessage(websocket.TextMessage, contentBytes)
+			}
+			mutex.Unlock()
+			continue
 		}
-		mutex.Unlock()
-	}
 
-	mutex.Lock()
-	delete(clients, conn)
-	mutex.Unlock()
-	log.Printf("客户端断开 | 在线: %d\n", len(clients))
+		mutex.Lock()
+		clients[conn] = message.ClientID
+
+		switch message.Type {
+		case "lock":
+			if !isLocked {
+				isLocked = true
+				lockedBy = message.ClientID
+				log.Printf("客户端 %s 抢到锁", message.ClientID)
+				mutex.Unlock()
+				broadcastLockStatus()
+			} else {
+				mutex.Unlock()
+			}
+
+		case "unlock":
+			if isLocked && lockedBy == message.ClientID {
+				isLocked = false
+				lockedBy = ""
+				log.Printf("客户端 %s 释放锁", message.ClientID)
+				mutex.Unlock()
+				broadcastLockStatus()
+			} else {
+				mutex.Unlock()
+			}
+
+		case "content":
+			if isLocked && lockedBy == message.ClientID {
+				content = message.Content
+				contentMsg := Message{
+					Type:    "content",
+					Content: content,
+				}
+				contentBytes, _ := json.Marshal(contentMsg)
+				mutex.Unlock()
+				// 广播给除了发送者之外的所有客户端
+				broadcast(contentBytes, conn)
+			} else {
+				mutex.Unlock()
+			}
+		}
+	}
 }
 
 func main() {
