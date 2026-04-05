@@ -105,6 +105,7 @@
         @media screen and (min-width: 768px) {
             textarea {
                 height: 500px;
+                font-size: 20px;
             }
         }
 
@@ -155,6 +156,8 @@
         let isLocked = false;
         let lockedByMe = false;
         let clientId = '';
+        let lastSyncContent = '';
+        let syncTimer = null;
 
         // 生成唯一客户端ID
         function generateClientId() {
@@ -188,6 +191,8 @@
                     if (data.type === 'content') {
                         console.log("收到内容消息:", data.content);
                         editor.value = data.content || '';
+                        // 更新最后同步的内容，避免不必要的同步
+                        lastSyncContent = data.content || '';
                     } else if (data.type === 'lock') {
                         console.log("收到锁状态消息:", data);
                         isLocked = data.locked;
@@ -199,6 +204,7 @@
                     console.log("解析消息失败:", e);
                     // 兼容旧格式
                     editor.value = evt.data || '';
+                    lastSyncContent = evt.data || '';
                 }
             };
 
@@ -253,6 +259,11 @@
                 lockButton.className = "lock-button lock-button-disabled";
                 lockButton.textContent = "🔒 抢锁编辑";
                 editor.disabled = true;
+                // 停止定时同步
+                if (syncTimer) {
+                    clearInterval(syncTimer);
+                    syncTimer = null;
+                }
                 return;
             }
 
@@ -261,15 +272,30 @@
                     lockButton.className = "lock-button lock-button-locked";
                     lockButton.textContent = "🔓 释放锁";
                     editor.disabled = false;
+                    // 启动定时同步（3秒一次）
+                    if (!syncTimer) {
+                        syncTimer = setInterval(syncContent, 3000);
+                        console.log("启动定时同步（3秒一次）");
+                    }
                 } else {
                     lockButton.className = "lock-button lock-button-disabled";
                     lockButton.textContent = "🔒 已被锁定";
                     editor.disabled = true;
+                    // 停止定时同步
+                    if (syncTimer) {
+                        clearInterval(syncTimer);
+                        syncTimer = null;
+                    }
                 }
             } else {
                 lockButton.className = "lock-button lock-button-unlocked";
                 lockButton.textContent = "🔒 抢锁编辑";
                 editor.disabled = true; // 未锁定时也设置为只读
+                // 停止定时同步
+                if (syncTimer) {
+                    clearInterval(syncTimer);
+                    syncTimer = null;
+                }
             }
         }
 
@@ -301,17 +327,31 @@
             }
         }
 
-        // 输入变化 → 发送
-        editor.oninput = function () {
-            if (ws && isConnected && isLocked && lockedByMe) {
+        // 同步内容到服务器
+        function syncContent() {
+            if (!ws || !isConnected || !isLocked || !lockedByMe) {
+                return;
+            }
+            
+            const currentContent = editor.value;
+            if (currentContent !== lastSyncContent) {
                 try {
                     ws.send(JSON.stringify({
                         type: 'content',
-                        content: editor.value,
+                        content: currentContent,
                         clientId: clientId
                     }));
-                } catch (e) {}
+                    lastSyncContent = currentContent;
+                    console.log("内容已同步");
+                } catch (e) {
+                    console.log("同步内容失败:", e);
+                }
             }
+        }
+
+        // 输入变化时不立即发送，等待定时同步
+        editor.oninput = function () {
+            // 输入变化时不做任何操作，等待定时同步
         };
 
         // 锁按钮点击事件
