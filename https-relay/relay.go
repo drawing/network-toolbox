@@ -309,7 +309,8 @@ func handleConnection(conn net.Conn) {
 func updateHostsFile() {
 	const hostsFile = "/etc/hosts"
 	const localhostIP = "127.0.0.1"
-	const comment = "# HTTPS Relay - Added by relay server"
+	const startMarker = "# === HTTPS Relay START - DO NOT EDIT MANUALLY ==="
+	const endMarker = "# === HTTPS Relay END ==="
 
 	// 检查是否有 root 权限
 	file, err := os.OpenFile(hostsFile, os.O_RDWR, 0644)
@@ -329,65 +330,67 @@ func updateHostsFile() {
 		return
 	}
 
-	// 解析现有域名映射
-	existingDomains := make(map[string]bool)
-	scanner := bufio.NewScanner(strings.NewReader(string(content)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+	// 处理文件内容，移除旧的自动添加区域
+	lines := strings.Split(string(content), "\n")
+	var newContent []string
+	inAutoSection := false
+
+	for _, line := range lines {
+		if line == startMarker {
+			inAutoSection = true
 			continue
 		}
-
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			existingDomains[parts[1]] = true
+		if line == endMarker {
+			inAutoSection = false
+			continue
+		}
+		if !inAutoSection {
+			newContent = append(newContent, line)
 		}
 	}
 
-	// 找出需要添加的域名
-	var domainsToAdd []string
+	// 移除末尾空行
+	for len(newContent) > 0 && newContent[len(newContent)-1] == "" {
+		newContent = newContent[:len(newContent)-1]
+	}
+
+	// 如果没有域名需要添加，只清理旧内容
+	if len(dnsCache) == 0 {
+		if err := os.Truncate(hostsFile, 0); err != nil {
+			log.Printf("[E] Failed to truncate %s: %v", hostsFile, err)
+			return
+		}
+		if _, err := file.WriteString(strings.Join(newContent, "\n")); err != nil {
+			log.Printf("[E] Failed to write cleaned content to %s: %v", hostsFile, err)
+			return
+		}
+		log.Println("[I] Cleaned up old HTTPS Relay entries from hosts file")
+		return
+	}
+
+	// 添加新的自动添加区域
+	newContent = append(newContent, "")
+	newContent = append(newContent, startMarker)
+	
 	for domain := range dnsCache {
-		if !existingDomains[domain] {
-			domainsToAdd = append(domainsToAdd, domain)
-		}
-	}
-
-	if len(domainsToAdd) == 0 {
-		log.Println("[I] No domains need to be added to hosts file")
-		return
-	}
-
-	// 写入新的内容
-	if _, err := file.Seek(0, io.SeekEnd); err != nil {
-		log.Printf("[E] Failed to seek to end of %s: %v", hostsFile, err)
-		return
-	}
-
-	// 如果文件不是以换行结尾，添加换行
-	if len(content) > 0 && content[len(content)-1] != '\n' {
-		if _, err := file.WriteString("\n"); err != nil {
-			log.Printf("[E] Failed to write newline to %s: %v", hostsFile, err)
-			return
-		}
-	}
-
-	// 添加注释
-	if _, err := file.WriteString(comment + "\n"); err != nil {
-		log.Printf("[E] Failed to write comment to %s: %v", hostsFile, err)
-		return
-	}
-
-	// 添加域名映射
-	for _, domain := range domainsToAdd {
-		line := fmt.Sprintf("%s %s\n", localhostIP, domain)
-		if _, err := file.WriteString(line); err != nil {
-			log.Printf("[E] Failed to write entry to %s: %v", hostsFile, err)
-			return
-		}
+		newContent = append(newContent, fmt.Sprintf("%s %s", localhostIP, domain))
 		log.Printf("[I] Added to hosts file: %s %s", localhostIP, domain)
 	}
+	
+	newContent = append(newContent, endMarker)
 
-	log.Printf("[I] Successfully updated %s with %d domains", hostsFile, len(domainsToAdd))
+	// 写入更新后的内容
+	if err := os.Truncate(hostsFile, 0); err != nil {
+		log.Printf("[E] Failed to truncate %s: %v", hostsFile, err)
+		return
+	}
+
+	if _, err := file.WriteString(strings.Join(newContent, "\n")); err != nil {
+		log.Printf("[E] Failed to write updated content to %s: %v", hostsFile, err)
+		return
+	}
+
+	log.Printf("[I] Successfully updated %s with %d domains", hostsFile, len(dnsCache))
 }
 
 // main 主函数
